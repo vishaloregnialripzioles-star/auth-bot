@@ -7,6 +7,15 @@ const crypto = require("node:crypto");
 const app = express();
 app.disable("x-powered-by");
 
+// Avoid caching OAuth responses and exposing unnecessary browser metadata.
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+
 const PORT = Number(process.env.PORT) || 3000;
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
