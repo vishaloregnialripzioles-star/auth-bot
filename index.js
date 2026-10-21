@@ -52,7 +52,7 @@ function verifyState(state) {
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
   try {
     const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
-    if (!/^\\d{17,20}$/.test(payload.discordId) || payload.exp < Date.now()) return null;
+    if (!/^\d{17,20}$/.test(payload.discordId) || payload.exp < Date.now()) return null;
     return payload;
   } catch { return null; }
 }
@@ -88,7 +88,7 @@ function verifyRow(userId) {
 }
 function verifyEmbed() {
   return new EmbedBuilder().setColor(0x5865F2).setTitle("🔒 Authorization required")
-    .setDescription("You need to verify your Discord account before using this bot's commands.\\n\\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, retry your command.")
+    .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, retry your command.")
     .setFooter({ text: "Secure Discord OAuth2 verification" });
 }
 function hasRole(interaction) {
@@ -200,12 +200,12 @@ client.on("interactionCreate", async interaction => {
 
 app.get("/", (_req, res) => res.type("html").send(htmlPage(
   "Discord verification",
-  'Use the **Verify with Discord** button in the bot\\'s message. This site uses official Discord OAuth2 and never asks for your Discord password.'
+  'Use the **Verify with Discord** button in the bot\'s message. This site uses official Discord OAuth2 and never asks for your Discord password.'
 )));
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 app.get("/login", (req, res) => {
   const discordId = req.query.discord_id;
-  if (typeof discordId !== "string" || !/^\\d{17,20}$/.test(discordId)) {
+  if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
   const state = signState({ discordId, nonce: crypto.randomBytes(24).toString("hex"), exp: Date.now() + 600000 });
