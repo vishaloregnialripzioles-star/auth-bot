@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const crypto = require("node:crypto");
+const { Pool } = require("pg");
 const {
   ActionRowBuilder, ActivityType, ButtonBuilder, ButtonStyle, Client,
   EmbedBuilder, GatewayIntentBits, REST, Routes, SlashCommandBuilder
@@ -17,9 +18,9 @@ app.use((_req, res, next) => {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
-const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, GUILD_ID, VERIFY_ROLE_ID } = process.env;
+const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL } = process.env;
 const STATE_SECRET = process.env.STATE_SECRET || CLIENT_SECRET;
-const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, GUILD_ID, VERIFY_ROLE_ID };
+const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL };
 const missing = Object.keys(required).filter((key) => !required[key]);
 if (missing.length) {
   console.error("Missing required environment variables: " + missing.join(", "));
@@ -65,6 +66,28 @@ function htmlPage(title, message) {
     "<h1>" + escapeHtml(title) + "</h1><p>" + message + "</p><p>You can close this page and return to Discord.</p></body></html>";
 }
 
+const db = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined,
+  connectionTimeoutMillis: 10000
+});
+const dbReady = db.query(`CREATE TABLE IF NOT EXISTS verified_users (
+  discord_id VARCHAR(20) PRIMARY KEY,
+  verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`).then(() => console.log("Verified-user database ready")).catch(error => {
+  console.error("Verified-user database initialization failed: " + error.message);
+  process.exit(1);
+});
+async function isVerified(userId) {
+  await dbReady;
+  const result = await db.query("SELECT 1 FROM verified_users WHERE discord_id = $1", [userId]);
+  return result.rowCount > 0;
+}
+async function markVerified(userId) {
+  await dbReady;
+  await db.query("INSERT INTO verified_users (discord_id) VALUES ($1) ON CONFLICT (discord_id) DO NOTHING", [userId]);
+}
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const commandData = [
   new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
@@ -91,11 +114,7 @@ function verifyEmbed() {
     .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, retry your command.")
     .setFooter({ text: "Secure Discord OAuth2 verification" });
 }
-function hasRole(interaction) {
-  const roles = interaction.member && interaction.member.roles;
-  if (Array.isArray(roles)) return roles.includes(VERIFY_ROLE_ID);
-  return Boolean(roles && roles.cache && roles.cache.has(VERIFY_ROLE_ID));
-}
+
 async function showVerify(interaction) {
   return interaction.reply({ embeds: [verifyEmbed()], components: [verifyRow(interaction.user.id)], ephemeral: true });
 }
@@ -105,8 +124,8 @@ client.once("ready", async () => {
   client.user.setActivity("Discord verification", { type: ActivityType.Watching });
   try {
     const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandData });
-    console.log("Registered " + commandData.length + " slash commands in guild " + GUILD_ID);
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commandData });
+    console.log("Registered " + commandData.length + " global slash commands for every server where the bot is installed");
   } catch (error) {
     console.error("Slash command registration failed: " + error.message);
   }
@@ -116,10 +135,10 @@ client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
   try {
     if (!interaction.inGuild()) {
-      return interaction.reply({ content: "Use this command inside the configured Discord server.", ephemeral: true });
+      return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
     }
     if (interaction.commandName === "verify") return showVerify(interaction);
-    if (!hasRole(interaction)) return showVerify(interaction);
+    if (!(await isVerified(interaction.user.id))) return showVerify(interaction);
 
     if (interaction.commandName === "ping") {
       const started = Date.now();
@@ -128,7 +147,7 @@ client.on("interactionCreate", async interaction => {
     }
     if (interaction.commandName === "help") {
       const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("🤖 Bot commands")
-        .setDescription("All commands except /verify require the verification role.")
+        .setDescription("Verify once with Discord OAuth2, then use commands in any server where this bot is installed.")
         .addFields(
           { name: "/ping", value: "Check bot latency.", inline: true },
           { name: "/userinfo [user]", value: "View basic user information.", inline: true },
@@ -252,24 +271,16 @@ app.get("/auth/callback", async (req, res) => {
         "You authorized a different account from the one that clicked Verify. Return to Discord, switch to the correct account, and click Verify again."
       ));
     }
-    await axios.put(
-      "https://discord.com/api/v10/guilds/" + GUILD_ID + "/members/" + user.id + "/roles/" + VERIFY_ROLE_ID,
-      null,
-      { headers: { Authorization: "Bot " + DISCORD_TOKEN }, timeout: 10000 }
-    );
+    await markVerified(user.id);
     return res.status(200).type("html").send(htmlPage(
       "Verification complete",
-      "Successfully authorized as <strong>" + escapeHtml(user.global_name || user.username) +
-      "</strong>. Your verification role has been added. Return to Discord and retry your command."
+      "Successfully verified as <strong>" + escapeHtml(user.global_name || user.username) +
+      "</strong>. Your account is now authorized to use the bot in any server where it is installed. No role was added. Return to Discord and retry your command."
     ));
   } catch (err) {
     const status = err.response && err.response.status;
-    console.error("OAuth/role assignment failed: " + (status || err.message));
-    const message = status === 404
-      ? "Your account was not found in the configured server. Join the server first, then verify again."
-      : status === 403
-        ? "The bot could not assign the verification role. Give the bot Manage Roles permission and move its highest role above the verification role."
-        : "Discord authorization or role assignment failed. Return to Discord and try again.";
+    console.error("OAuth verification/database save failed: " + (status || err.message));
+    const message = "Discord authorization or saving verification failed. Please return to Discord and try again.";
     return res.status(502).type("html").send(htmlPage("Verification could not be completed", message));
   }
 });
