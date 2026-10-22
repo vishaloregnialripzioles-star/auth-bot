@@ -310,8 +310,36 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
   }
 });
 app.use((_req, res) => res.status(404).type("text").send("Not found"));
-app.listen(PORT, "0.0.0.0", () => console.log("Auth Bot web server listening on port " + PORT));
+const httpServer = app.listen(PORT, "0.0.0.0", () => console.log("Auth Bot web server listening on port " + PORT));
 client.login(DISCORD_TOKEN).catch(error => {
   console.error("Discord bot login failed: " + error.message);
   process.exit(1);
+});
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(signal + " received; shutting down gracefully");
+  const forceExit = setTimeout(() => process.exit(1), 10000);
+  forceExit.unref();
+  try {
+    await new Promise(resolve => httpServer.close(resolve));
+    client.destroy();
+    await db.end();
+    clearTimeout(forceExit);
+    process.exit(0);
+  } catch (error) {
+    console.error("Graceful shutdown failed: " + error.message);
+    process.exit(1);
+  }
+}
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.on("unhandledRejection", error => {
+  console.error("Unhandled promise rejection:", error instanceof Error ? error.message : String(error));
+});
+process.on("uncaughtException", error => {
+  console.error("Uncaught exception:", error.message);
+  shutdown("uncaughtException");
 });
