@@ -42,7 +42,7 @@ try {
   const publicUrl = new URL(PUBLIC_URL || redirect.origin);
   if (publicUrl.protocol !== "https:" && publicUrl.hostname !== "localhost") throw new Error("PUBLIC_URL must use HTTPS.");
   if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) throw new Error("PUBLIC_URL must be the website origin only, with no path, query, or fragment.");
-  if (publicUrl.origin !== redirect.origin && !PUBLIC_URL) throw new Error("Set PUBLIC_URL to the public website origin.");
+  if (publicUrl.origin !== redirect.origin) throw new Error("PUBLIC_URL and REDIRECT_URI must use the same host.");
   APP_BASE_URL = publicUrl.origin;
 } catch (error) {
   console.error("Invalid OAuth URL configuration: " + error.message);
