@@ -37,11 +37,12 @@ Set these environment variables in Render (never commit real secrets):
 | `CLIENT_SECRET` | Yes | OAuth2 Client Secret |
 | `DISCORD_TOKEN` | Yes | Bot token |
 | `REDIRECT_URI` | Yes | Exact HTTPS callback URL ending in `/auth/callback` |
+| `PUBLIC_URL` | Recommended | Public website origin only, e.g. `https://your-service.onrender.com` (no path). Must use the same host as `REDIRECT_URI`. |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `DATABASE_SSL` | Provider-dependent | Set to `true` only if your PostgreSQL provider requires TLS configuration |
 | `STATE_SECRET` | Recommended | Long random secret used to sign OAuth state; if omitted, the OAuth client secret is used |
 
-The OAuth redirect URI must exactly match the URL registered in the Discord Developer Portal. Use a PostgreSQL database that persists data across deploys; the database table is created automatically at startup.
+The OAuth redirect URI must exactly match the URL registered in the Discord Developer Portal. Set `PUBLIC_URL` to the exact public Render service origin so the Verify button opens the deployed `/login` route. Both URLs must use the same host. Use a PostgreSQL database that persists data across deploys; the database table is created automatically at startup.
 
 ## Authorization behavior
 
