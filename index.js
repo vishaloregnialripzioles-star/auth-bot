@@ -9,6 +9,8 @@ const {
 } = require("discord.js");
 
 const app = express();
+// Render terminates TLS at its proxy; trust one proxy hop for client IP handling.
+app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
