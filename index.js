@@ -24,6 +24,9 @@ app.use((_req, res, next) => {
 
 const PORT = Number(process.env.PORT) || 3000;
 const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL } = process.env;
+// Set PUBLIC_URL to the exact public Render service origin (for example, https://auth-bot-xxxx.onrender.com).
+// This keeps the Discord button pointed at the deployed website even if REDIRECT_URI is accidentally misconfigured.
+const PUBLIC_URL = process.env.PUBLIC_URL;
 const STATE_SECRET = process.env.STATE_SECRET || CLIENT_SECRET;
 const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL };
 const missing = Object.keys(required).filter((key) => !required[key]);
@@ -31,11 +34,18 @@ if (missing.length) {
   console.error("Missing required environment variables: " + missing.join(", "));
   process.exit(1);
 }
+let APP_BASE_URL;
 try {
   const redirect = new URL(REDIRECT_URI);
   if (redirect.protocol !== "https:" && redirect.hostname !== "localhost") throw new Error("REDIRECT_URI must use HTTPS.");
+  if (redirect.pathname !== "/auth/callback") throw new Error("REDIRECT_URI must end with /auth/callback.");
+  const publicUrl = new URL(PUBLIC_URL || redirect.origin);
+  if (publicUrl.protocol !== "https:" && publicUrl.hostname !== "localhost") throw new Error("PUBLIC_URL must use HTTPS.");
+  if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) throw new Error("PUBLIC_URL must be the website origin only, with no path, query, or fragment.");
+  if (publicUrl.origin !== redirect.origin && !PUBLIC_URL) throw new Error("Set PUBLIC_URL to the public website origin.");
+  APP_BASE_URL = publicUrl.origin;
 } catch (error) {
-  console.error("Invalid REDIRECT_URI: " + error.message);
+  console.error("Invalid OAuth URL configuration: " + error.message);
   process.exit(1);
 }
 
@@ -111,7 +121,7 @@ const commandData = [
 ].map(command => command.toJSON());
 
 function verifyRow(userId) {
-  const url = new URL("/login", REDIRECT_URI);
+  const url = new URL("/login", APP_BASE_URL);
   url.searchParams.set("discord_id", userId);
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setLabel("Verify with Discord").setStyle(ButtonStyle.Link).setURL(url.toString())
@@ -260,6 +270,7 @@ app.get("/login", limitOAuthRequests, (req, res) => {
   authorizeUrl.search = new URLSearchParams({
     client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: "identify", state
   }).toString();
+  console.log("Starting Discord OAuth authorization for app ID ending in " + String(CLIENT_ID).slice(-4));
   return res.redirect(302, authorizeUrl.toString());
 });
 
