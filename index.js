@@ -14,6 +14,9 @@ app.use((_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https://cdn.discordapp.com https://media.discordapp.net; base-uri 'none'; frame-ancestors 'none'; form-action https://discord.com");
   next();
 });
 
@@ -45,7 +48,7 @@ function signState(payload) {
   return encoded + "." + sig;
 }
 function verifyState(state) {
-  if (typeof state !== "string") return null;
+  if (typeof state !== "string" || state.length > 2048) return null;
   const parts = state.split(".");
   if (parts.length !== 2) return null;
   const expected = crypto.createHmac("sha256", STATE_SECRET).update(parts[0]).digest();
@@ -53,17 +56,20 @@ function verifyState(state) {
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
   try {
     const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
-    if (!/^\d{17,20}$/.test(payload.discordId) || payload.exp < Date.now()) return null;
+    if (!payload || !/^\d{17,20}$/.test(payload.discordId) || !Number.isFinite(payload.exp) || payload.exp < Date.now() || typeof payload.nonce !== "string" || !/^[a-f0-9]{48}$/.test(payload.nonce)) return null;
     return payload;
   } catch { return null; }
 }
+function cookieSecureAttribute() {
+  return new URL(REDIRECT_URI).protocol === "https:" ? "; Secure" : "";
+}
 function clearCookie(res) {
-  res.setHeader("Set-Cookie", "oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+  res.setHeader("Set-Cookie", "oauth_state=; HttpOnly" + cookieSecureAttribute() + "; SameSite=Lax; Path=/; Max-Age=0");
 }
 function htmlPage(title, message) {
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
-    escapeHtml(title) + '</title></head><body style="font-family:system-ui,sans-serif;max-width:680px;margin:12vh auto;padding:24px;line-height:1.6">' +
-    "<h1>" + escapeHtml(title) + "</h1><p>" + message + "</p><p>You can close this page and return to Discord.</p></body></html>";
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#5865f2"><title>' +
+    escapeHtml(title) + ' · Auth Bot</title><style>' +
+    '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at top,#252b58 0%,#111322 55%,#0b0c14 100%);color:#f7f7fb;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}.card{width:min(100%,620px);padding:clamp(24px,6vw,48px);border:1px solid #ffffff20;border-radius:28px;background:#171927eF;box-shadow:0 24px 80px #0006}.brand{display:flex;align-items:center;gap:12px;color:#b9bdff;font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.mark{display:grid;place-items:center;width:42px;height:42px;border-radius:14px;background:#5865f2;color:white;font-size:22px}.pill{display:inline-flex;align-items:center;gap:8px;margin:28px 0 8px;padding:7px 11px;border:1px solid #7ce6b433;border-radius:999px;background:#7ce6b40d;color:#8ef0c1;font-size:12px;font-weight:700}h1{margin:8px 0 14px;font-size:clamp(28px,6vw,42px);letter-spacing:-.04em;line-height:1.12}p{color:#c5c8d8;line-height:1.75;font-size:16px}.note{margin-top:28px;padding-top:18px;border-top:1px solid #ffffff16;color:#9298b2;font-size:13px}.dot{width:7px;height:7px;border-radius:50%;background:#8ef0c1;box-shadow:0 0 12px #8ef0c1}</style></head><body><main class="card"><div class="brand"><span class="mark">✓</span> AUTH BOT <span style="margin-left:auto;font-size:11px;letter-spacing:0;color:#9298b2">DISCORD OAUTH2</span></div><div class="pill"><span class="dot"></span> Secure authorization</div><h1>' + escapeHtml(title) + '</h1><p>' + message + '</p><div class="note">Official Discord authorization · We never ask for your Discord password.<br>You can close this page and return to Discord.</div></main></body></html>';
 }
 
 const db = new Pool({
@@ -222,13 +228,32 @@ app.get("/", (_req, res) => res.type("html").send(htmlPage(
   'Use the **Verify with Discord** button in the bot\'s message. This site uses official Discord OAuth2 and never asks for your Discord password.'
 )));
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
-app.get("/login", (req, res) => {
+
+// Lightweight per-process throttling for OAuth endpoints; protects against rapid retries.
+const requestBuckets = new Map();
+function limitOAuthRequests(req, res, next) {
+  const now = Date.now();
+  const key = req.ip || req.socket.remoteAddress || "unknown";
+  let bucket = requestBuckets.get(key);
+  if (!bucket || now - bucket.startedAt >= 15 * 60 * 1000) bucket = { startedAt: now, count: 0 };
+  bucket.count += 1;
+  requestBuckets.set(key, bucket);
+  if (requestBuckets.size > 5000) {
+    for (const [ip, item] of requestBuckets) if (now - item.startedAt >= 15 * 60 * 1000) requestBuckets.delete(ip);
+  }
+  if (bucket.count > 40) {
+    res.setHeader("Retry-After", "900");
+    return res.status(429).type("html").send(htmlPage("Slow down a moment", "Too many authorization attempts came from this connection. Wait a little and try again."));
+  }
+  return next();
+}
+app.get("/login", limitOAuthRequests, (req, res) => {
   const discordId = req.query.discord_id;
   if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
   const state = signState({ discordId, nonce: crypto.randomBytes(24).toString("hex"), exp: Date.now() + 600000 });
-  res.setHeader("Set-Cookie", "oauth_state=" + encodeURIComponent(state) + "; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600");
+  res.setHeader("Set-Cookie", "oauth_state=" + encodeURIComponent(state) + "; HttpOnly" + cookieSecureAttribute() + "; SameSite=Lax; Path=/; Max-Age=600");
   const authorizeUrl = new URL("https://discord.com/oauth2/authorize");
   authorizeUrl.search = new URLSearchParams({
     client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: "identify", state
@@ -236,7 +261,7 @@ app.get("/login", (req, res) => {
   return res.redirect(302, authorizeUrl.toString());
 });
 
-app.get("/auth/callback", async (req, res) => {
+app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
   const { code, state, error } = req.query;
   if (error) {
     clearCookie(res);
