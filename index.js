@@ -18,20 +18,24 @@ app.use((_req, res, next) => {
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https://cdn.discordapp.com https://media.discordapp.net; base-uri 'none'; frame-ancestors 'none'; form-action https://discord.com");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https://cdn.discordapp.com https://media.discordapp.net; base-uri 'none'; frame-ancestors 'none';");
   next();
 });
 
 const PORT = Number(process.env.PORT) || 3000;
 const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL } = process.env;
+const STATE_SECRET = process.env.STATE_SECRET;
 // Set PUBLIC_URL to the exact public Render service origin (for example, https://auth-bot-xxxx.onrender.com).
 // This keeps the Discord button pointed at the deployed website even if REDIRECT_URI is accidentally misconfigured.
 const PUBLIC_URL = process.env.PUBLIC_URL;
-const STATE_SECRET = process.env.STATE_SECRET || CLIENT_SECRET;
-const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL };
+const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, STATE_SECRET };
 const missing = Object.keys(required).filter((key) => !required[key]);
 if (missing.length) {
   console.error("Missing required environment variables: " + missing.join(", "));
+  process.exit(1);
+}
+if (STATE_SECRET.length < 32) {
+  console.error("STATE_SECRET must be at least 32 characters long and should be a random secret unique from DISCORD_CLIENT_SECRET.");
   process.exit(1);
 }
 let APP_BASE_URL;
@@ -81,7 +85,8 @@ function clearCookie(res) {
 function htmlPage(title, message) {
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#5865f2"><title>' +
     escapeHtml(title) + ' · Auth Bot</title><style>' +
-    '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at top,#252b58 0%,#111322 55%,#0b0c14 100%);color:#f7f7fb;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}.card{width:min(100%,620px);padding:clamp(24px,6vw,48px);border:1px solid #ffffff20;border-radius:28px;background:#171927eF;box-shadow:0 24px 80px #0006}.brand{display:flex;align-items:center;gap:12px;color:#b9bdff;font-size:13px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.mark{display:grid;place-items:center;width:42px;height:42px;border-radius:14px;background:#5865f2;color:white;font-size:22px}.pill{display:inline-flex;align-items:center;gap:8px;margin:28px 0 8px;padding:7px 11px;border:1px solid #7ce6b433;border-radius:999px;background:#7ce6b40d;color:#8ef0c1;font-size:12px;font-weight:700}h1{margin:8px 0 14px;font-size:clamp(28px,6vw,42px);letter-spacing:-.04em;line-height:1.12}p{color:#c5c8d8;line-height:1.75;font-size:16px}.note{margin-top:28px;padding-top:18px;border-top:1px solid #ffffff16;color:#9298b2;font-size:13px}.dot{width:7px;height:7px;border-radius:50%;background:#8ef0c1;box-shadow:0 0 12px #8ef0c1}</style></head><body><main class="card"><div class="brand"><span class="mark">✓</span> AUTH BOT <span style="margin-left:auto;font-size:11px;letter-spacing:0;color:#9298b2">DISCORD OAUTH2</span></div><div class="pill"><span class="dot"></span> Secure authorization</div><h1>' + escapeHtml(title) + '</h1><p>' + message + '</p><div class="note">Official Discord authorization · We never ask for your Discord password.<br>You can close this page and return to Discord.</div></main></body></html>';
+    '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at top,#252b58 0%,#111322 55%,#0b0c14 100%);color:#f7f7fb;font-family:Segoe UI,system-ui,-apple-system,sans-serif}main{width:min(100%,560px);background:rgba(19,23,39,.8);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px 24px;box-shadow:0 20px 60px rgba(0,0,0,.45)}h1{margin:0 0 12px;font-size:clamp(2rem,5vw,2.5rem)}p{margin:0;line-height:1.65;color:#e8ebff}strong{color:#fff}a{color:#9bb3ff;text-decoration:none}a:hover{text-decoration:underline}.meta{margin-top:18px;color:#b9bfd9;font-size:.92rem}button{appearance:none;border:none;border-radius:12px;padding:12px 18px;background:linear-gradient(135deg,#5865f2,#4752c4);color:#fff;font-weight:700;cursor:pointer}button:hover{filter:brightness(1.08)}@media(max-width:640px){main{padding:22px 18px;border-radius:16px}}</style></head><body><main><h1>' +
+    escapeHtml(title) + '</h1><p>' + message + '</p><div class="meta">Auth Bot • Discord OAuth2</div></main></body></html>';
 }
 
 const db = new Pool({
@@ -106,7 +111,7 @@ async function markVerified(userId) {
   await db.query("INSERT INTO verified_users (discord_id) VALUES ($1) ON CONFLICT (discord_id) DO NOTHING", [userId]);
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 const commandData = [
   new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
   new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
@@ -129,7 +134,7 @@ function verifyRow(userId) {
 }
 function verifyEmbed() {
   return new EmbedBuilder().setColor(0x5865F2).setTitle("🔒 Authorization required")
-    .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, retry your command.")
+    .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, return to Discord and retry your command.")
     .setFooter({ text: "Secure Discord OAuth2 verification" });
 }
 
@@ -146,6 +151,19 @@ client.once("ready", async () => {
     console.log("Registered " + commandData.length + " global slash commands for every server where the bot is installed");
   } catch (error) {
     console.error("Slash command registration failed: " + error.message);
+  }
+});
+
+client.on("guildMemberAdd", async member => {
+  if (member.user.bot) return;
+  try {
+    await member.send({
+      embeds: [verifyEmbed()],
+      components: [verifyRow(member.id)]
+    });
+    console.log("Sent verification prompt to newly joined user: " + member.user.tag);
+  } catch (error) {
+    console.log("Could not DM verification prompt to " + member.user.tag + ": " + error.message);
   }
 });
 
