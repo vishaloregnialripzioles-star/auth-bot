@@ -139,6 +139,8 @@ const commandData = [
   new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
   new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
   new SlashCommandBuilder().setName("verify").setDescription("Get the authorization button"),
+  new SlashCommandBuilder().setName("pull").setDescription("Preview verified accounts; does not join accounts to servers")
+    .addIntegerOption(o => o.setName("count").setDescription("Maximum accounts to preview (1-25)").setMinValue(1).setMaxValue(25).setRequired(false)),
   new SlashCommandBuilder().setName("setguild").setDescription("Set the server used for consent-based joining")
     .addStringOption(o => o.setName("guild_id").setDescription("Server ID (the bot must be installed there)").setRequired(true)),
   new SlashCommandBuilder().setName("userinfo").setDescription("Show a user's basic profile")
@@ -199,6 +201,31 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
     }
     if (interaction.commandName === "verify") return showVerify(interaction);
+    if (interaction.commandName === "pull") {
+      if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) {
+        return interaction.reply({ content: "You need Manage Server permission to use /pull.", ephemeral: true });
+      }
+      await dbReady;
+      const limit = interaction.options.getInteger("count") || 10;
+      const result = await db.query(
+        "SELECT discord_id, verified_at FROM verified_users ORDER BY verified_at DESC LIMIT $1",
+        [limit]
+      );
+      if (!result.rows.length) {
+        return interaction.reply({
+          content: "No verified accounts are recorded yet. /pull is a preview only; it does not add accounts to any server.",
+          ephemeral: true
+        });
+      }
+      const lines = result.rows.map((row, index) =>
+        (index + 1) + ". <@" + row.discord_id + "> (ID: \`" + row.discord_id + "\`) — verified <t:" +
+        Math.floor(new Date(row.verified_at).getTime() / 1000) + ":R>"
+      );
+      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("🔎 Verified-account preview")
+        .setDescription(lines.join("\\n"))
+        .setFooter({ text: "Preview only • No accounts were added to a server" });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
     if (interaction.commandName === "setguild") {
       if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) return interaction.reply({ content: "You need Manage Server permission to change the target server.", ephemeral: true });
       const guildId = interaction.options.getString("guild_id", true).trim();
@@ -226,6 +253,7 @@ client.on("interactionCreate", async interaction => {
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
           { name: "/verify", value: "Get the authorization button.", inline: true },
+          { name: "/pull [count]", value: "Preview recent verified accounts (Manage Server required); no automatic joining.", inline: true },
           { name: "/setguild guild_id", value: "Set target server (Manage Server required).", inline: true }
         ).setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
