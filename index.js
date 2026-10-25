@@ -225,7 +225,8 @@ client.on("interactionCreate", async interaction => {
           { name: "/serverinfo", value: "View server information.", inline: true },
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
-          { name: "/verify", value: "Get the authorization button.", inline: true },\n          { name: "/setguild guild_id", value: "Set target server (Manage Server required).", inline: true }
+          { name: "/verify", value: "Get the authorization button.", inline: true },
+          { name: "/setguild guild_id", value: "Set target server (Manage Server required).", inline: true }
         ).setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -386,7 +387,7 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
       );
       joinMessage = joinResult.status === 201
         ? " This account has joined <strong>" + escapeHtml(targetGuild.name) + "</strong>."
-        : " This account already belonged to <strong>" + escapeHtml(TARGET_GUILD_NAME) + "</strong>.";
+        : " This account already belonged to <strong>" + escapeHtml(targetGuild.name) + "</strong>.";
     } catch (joinError) {
       const joinStatus = joinError.response && joinError.response.status;
       console.error("Consented server join failed: " + (joinStatus || joinError.message));
