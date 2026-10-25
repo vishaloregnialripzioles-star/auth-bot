@@ -101,7 +101,7 @@ const dbReady = db.query(`CREATE TABLE IF NOT EXISTS verified_users (
   setting_key TEXT PRIMARY KEY,
   setting_value TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`)).then(() => console.log("Verified-user database ready")).catch(error => {
+)`)).then(() => db.query("INSERT INTO app_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO NOTHING", ["target_guild_id", "1550402240936935507"])).then(() => console.log("Verified-user database ready")).catch(error => {
   console.error("Verified-user database initialization failed: " + error.message);
   process.exit(1);
 });
@@ -202,7 +202,7 @@ client.on("interactionCreate", async interaction => {
     if (interaction.commandName === "setguild") {
       if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) return interaction.reply({ content: "You need Manage Server permission to change the target server.", ephemeral: true });
       const guildId = interaction.options.getString("guild_id", true).trim();
-      if (!/^\\d{17,20}$/.test(guildId)) return interaction.reply({ content: "Enter a valid Discord server ID.", ephemeral: true });
+      if (!/^\d{17,20}$/.test(guildId)) return interaction.reply({ content: "Enter a valid Discord server ID.", ephemeral: true });
       let guild;
       try { guild = await client.guilds.fetch(guildId); } catch { return interaction.reply({ content: "I cannot access that server. Invite the bot there first, then try again.", ephemeral: true }); }
       await setTargetGuild(guild.id);
