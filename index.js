@@ -222,7 +222,7 @@ client.on("interactionCreate", async interaction => {
         Math.floor(new Date(row.verified_at).getTime() / 1000) + ":R>"
       );
       const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("🔎 Verified-account preview")
-        .setDescription(lines.join("\\n"))
+        .setDescription(lines.join("\n"))
         .setFooter({ text: "Preview only • No accounts were added to a server" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
