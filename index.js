@@ -128,6 +128,15 @@ const dbReady = db.query(`
     verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
+  CREATE TABLE IF NOT EXISTS user_oauth_tokens (
+    discord_id VARCHAR(20) PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    token_type TEXT NOT NULL DEFAULT 'Bearer',
+    expires_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
   CREATE TABLE IF NOT EXISTS guild_verify_config (
     guild_id VARCHAR(20) PRIMARY KEY,
     channel_id VARCHAR(20) NOT NULL,
@@ -159,6 +168,26 @@ async function isVerified(userId) {
 async function markVerified(userId) {
   await dbReady;
   await db.query("INSERT INTO verified_users (discord_id) VALUES ($1) ON CONFLICT (discord_id) DO NOTHING", [userId]);
+}
+
+async function saveUserOAuthTokens(userId, tokenData) {
+  await dbReady;
+  await db.query(`
+    INSERT INTO user_oauth_tokens (discord_id, access_token, refresh_token, token_type, expires_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, NOW())
+    ON CONFLICT (discord_id) DO UPDATE SET
+      access_token = EXCLUDED.access_token,
+      refresh_token = EXCLUDED.refresh_token,
+      token_type = EXCLUDED.token_type,
+      expires_at = EXCLUDED.expires_at,
+      updated_at = NOW()
+  `, [userId, tokenData.access_token, tokenData.refresh_token || null, tokenData.token_type || "Bearer", tokenData.expires_at || null]);
+}
+
+async function getUserOAuthTokens(userId) {
+  await dbReady;
+  const result = await db.query("SELECT * FROM user_oauth_tokens WHERE discord_id = $1", [userId]);
+  return result.rows[0] || null;
 }
 
 async function getGuildVerifyConfig(guildId) {
@@ -231,10 +260,10 @@ const commandData = [
     .addStringOption((option) => option.setName("description").setDescription("Optional embed description").setRequired(false))
     .addStringOption((option) => option.setName("buttontext").setDescription("Optional button label").setRequired(false))
     .addIntegerOption((option) => option.setName("color").setDescription("Optional embed color (example: 5865F2)").setRequired(false)),
-  new SlashCommandBuilder().setName("pull").setDescription("Send restore invites to verified users")
-    .addSubcommand((subcommand) => subcommand.setName("all").setDescription("Send an invite to every verified user"))
-    .addSubcommand((subcommand) => subcommand.setName("user").setDescription("Send an invite to one specific verified user").addUserOption((option) => option.setName("user").setDescription("Verified user to invite").setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName("count").setDescription("Send an invite to a number of verified users").addIntegerOption((option) => option.setName("count").setDescription("How many verified users to invite").setRequired(true).setMinValue(1).setMaxValue(100))),
+  new SlashCommandBuilder().setName("pull").setDescription("Directly add verified users to this server")
+    .addSubcommand((subcommand) => subcommand.setName("all").setDescription("Add every verified user to this server"))
+    .addSubcommand((subcommand) => subcommand.setName("user").setDescription("Add one specific verified user to this server").addUserOption((option) => option.setName("user").setDescription("Verified user to add").setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName("count").setDescription("Add a number of verified users to this server").addIntegerOption((option) => option.setName("count").setDescription("How many verified users to add").setRequired(true).setMinValue(1).setMaxValue(100))),
   new SlashCommandBuilder().setName("userinfo").setDescription("Show a user's basic profile").addUserOption((option) => option.setName("user").setDescription("User to inspect").setRequired(false)),
   new SlashCommandBuilder().setName("serverinfo").setDescription("Show this server's information"),
   new SlashCommandBuilder().setName("avatar").setDescription("Show a user's avatar").addUserOption((option) => option.setName("user").setDescription("User whose avatar to show").setRequired(false)),
@@ -305,6 +334,19 @@ async function handleVerifyCommand(interaction) {
   return interaction.reply({ content: `Verification message sent to ${targetChannel}.`, ephemeral: true });
 }
 
+async function addUserToGuild(guildId, userId, accessToken) {
+  const endpoint = `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`;
+  const body = { access_token: accessToken };
+  const response = await axios.put(endpoint, body, {
+    headers: {
+      Authorization: `Bot ${DISCORD_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    timeout: 15000
+  });
+  return response.status === 201 || response.status === 204 || response.status === 200;
+}
+
 async function handlePullCommand(interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
@@ -338,48 +380,31 @@ async function handlePullCommand(interaction) {
     return interaction.reply({ content: "No verified users matched this request.", ephemeral: true });
   }
 
-  const inviteChannel = interaction.guild.channels.cache.find((channel) => channel.isTextBased?.() && channel.type !== ChannelType.GuildCategory && channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice);
-  if (!inviteChannel) {
-    return interaction.reply({ content: "This server does not have a usable text channel for invite links.", ephemeral: true });
-  }
+  let successCount = 0;
+  let missingTokenCount = 0;
 
-  let invite;
-  try {
-    invite = await inviteChannel.createInvite({
-      maxAge: 0,
-      maxUses: 1,
-      unique: true,
-      reason: "Restore verified members into the server"
-    });
-  } catch (error) {
-    console.error("Failed to create invite for restore: " + error.message);
-    return interaction.reply({ content: "I could not generate an invite link for this server.", ephemeral: true });
-  }
-
-  let sent = 0;
   for (const userId of targetIds) {
-    const currentMember = interaction.guild.members.cache.get(userId) || null;
-    if (currentMember) continue;
+    const guildMember = interaction.guild.members.cache.get(userId) || null;
+    if (guildMember) continue;
+
+    const oauthToken = await getUserOAuthTokens(userId);
+    if (!oauthToken || !oauthToken.access_token) {
+      missingTokenCount += 1;
+      continue;
+    }
 
     try {
-      const user = await client.users.fetch(userId);
-      await user.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x2ecc71)
-            .setTitle("Rejoin " + interaction.guild.name)
-            .setDescription("A server administrator restored your access.\n\nJoin here: " + invite.url)
-            .setFooter({ text: "Secure server re-join" })
-        ]
-      });
-      sent += 1;
-      await db.query("INSERT INTO restore_events (guild_id, discord_id) VALUES ($1, $2) ON CONFLICT (guild_id, discord_id) DO NOTHING", [interaction.guild.id, userId]);
+      const joined = await addUserToGuild(interaction.guild.id, userId, oauthToken.access_token);
+      if (joined) {
+        successCount += 1;
+        await db.query("INSERT INTO restore_events (guild_id, discord_id) VALUES ($1, $2) ON CONFLICT (guild_id, discord_id) DO NOTHING", [interaction.guild.id, userId]);
+      }
     } catch (error) {
-      console.error("Could not DM restore invite to user " + userId + ": " + error.message);
+      console.error("Could not add member " + userId + " to guild " + interaction.guild.id + ": " + error.response?.data?.message || error.message);
     }
   }
 
-  return interaction.reply({ content: `Restore invite sent to ${sent} verified user(s).`, ephemeral: true });
+  return interaction.reply({ content: `Direct join attempted for ${successCount} verified user(s). ${missingTokenCount} user(s) were not eligible because they had not authorized guild join access.`, ephemeral: true });
 }
 
 client.on("interactionCreate", async (interaction) => {
@@ -409,7 +434,7 @@ client.on("interactionCreate", async (interaction) => {
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
           { name: "/verify", value: "Send a verification embed.", inline: true },
-          { name: "/pull", value: "Send restore invites to verified users.", inline: true }
+          { name: "/pull", value: "Directly add verified users to the server.", inline: true }
         )
         .setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
@@ -510,7 +535,7 @@ app.get("/login", limitOAuthRequests, (req, res) => {
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
     response_type: "code",
-    scope: "identify guilds",
+    scope: "identify guilds.join",
     state
   }).toString();
 
@@ -551,6 +576,11 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
     );
 
     const accessToken = tokenResponse.data.access_token;
+    const refreshToken = tokenResponse.data.refresh_token;
+    const expiresIn = tokenResponse.data.expires_in;
+    const tokenType = tokenResponse.data.token_type || "Bearer";
+    const expiresAt = expiresIn ? new Date(Date.now() + Number(expiresIn) * 1000).toISOString() : null;
+
     const profile = await axios.get("https://discord.com/api/v10/users/@me", {
       headers: { Authorization: "Bearer " + accessToken },
       timeout: 10000
@@ -564,6 +594,12 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
       ));
     }
 
+    await saveUserOAuthTokens(user.id, {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      token_type: tokenType,
+      expires_at: expiresAt
+    });
     await markVerified(user.id);
     return res.status(200).type("html").send(htmlPage(
       "Verification complete",
