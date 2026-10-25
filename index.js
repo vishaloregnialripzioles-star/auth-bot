@@ -4,12 +4,20 @@ const axios = require("axios");
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const {
-  ActionRowBuilder, ActivityType, ButtonBuilder, ButtonStyle, Client,
-  EmbedBuilder, GatewayIntentBits, REST, Routes, SlashCommandBuilder
+  ActionRowBuilder,
+  ActivityType,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
+  Client,
+  EmbedBuilder,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder
 } = require("discord.js");
 
 const app = express();
-// Render terminates TLS at its proxy; trust one proxy hop for client IP handling.
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use((_req, res, next) => {
@@ -25,19 +33,24 @@ app.use((_req, res, next) => {
 const PORT = Number(process.env.PORT) || 3000;
 const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL } = process.env;
 const STATE_SECRET = process.env.STATE_SECRET;
-// Set PUBLIC_URL to the exact public Render service origin (for example, https://auth-bot-xxxx.onrender.com).
-// This keeps the Discord button pointed at the deployed website even if REDIRECT_URI is accidentally misconfigured.
 const PUBLIC_URL = process.env.PUBLIC_URL;
+
+const DEFAULT_VERIFY_TITLE = "🔒 Authorization required";
+const DEFAULT_VERIFY_DESCRIPTION = "You need to verify your Discord account before using this server.\n\nClick the button below and authorize the same account you use here.";
+const DEFAULT_VERIFY_BUTTON = "Verify with Discord";
+const DEFAULT_VERIFY_COLOR = 0x5865f2;
+
 const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, STATE_SECRET };
 const missing = Object.keys(required).filter((key) => !required[key]);
 if (missing.length) {
   console.error("Missing required environment variables: " + missing.join(", "));
   process.exit(1);
 }
-if (STATE_SECRET.length < 32) {
+if (String(STATE_SECRET).length < 32) {
   console.error("STATE_SECRET must be at least 32 characters long and should be a random secret unique from DISCORD_CLIENT_SECRET.");
   process.exit(1);
 }
+
 let APP_BASE_URL;
 try {
   const redirect = new URL(REDIRECT_URI);
@@ -55,14 +68,20 @@ try {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
   })[char]);
 }
+
 function signState(payload) {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = crypto.createHmac("sha256", STATE_SECRET).update(encoded).digest("base64url");
   return encoded + "." + sig;
 }
+
 function verifyState(state) {
   if (typeof state !== "string" || state.length > 2048) return null;
   const parts = state.split(".");
@@ -70,23 +89,31 @@ function verifyState(state) {
   const expected = crypto.createHmac("sha256", STATE_SECRET).update(parts[0]).digest();
   const supplied = Buffer.from(parts[1], "base64url");
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
+
   try {
     const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
-    if (!payload || !/^\d{17,20}$/.test(payload.discordId) || !Number.isFinite(payload.exp) || payload.exp < Date.now() || typeof payload.nonce !== "string" || !/^[a-f0-9]{48}$/.test(payload.nonce)) return null;
+    if (!payload || !/^\d{17,20}$/.test(payload.discordId) || !Number.isFinite(payload.exp) || payload.exp < Date.now() || typeof payload.nonce !== "string" || !/^[a-f0-9]{48}$/.test(payload.nonce)) {
+      return null;
+    }
     return payload;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
+
 function cookieSecureAttribute() {
   return new URL(REDIRECT_URI).protocol === "https:" ? "; Secure" : "";
 }
+
 function clearCookie(res) {
   res.setHeader("Set-Cookie", "oauth_state=; HttpOnly" + cookieSecureAttribute() + "; SameSite=Lax; Path=/; Max-Age=0");
 }
+
 function htmlPage(title, message) {
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#5865f2"><title>' +
-    escapeHtml(title) + ' · Auth Bot</title><style>' +
-    '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at top,#252b58 0%,#111322 55%,#0b0c14 100%);color:#f7f7fb;font-family:Segoe UI,system-ui,-apple-system,sans-serif}main{width:min(100%,560px);background:rgba(19,23,39,.8);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px 24px;box-shadow:0 20px 60px rgba(0,0,0,.45)}h1{margin:0 0 12px;font-size:clamp(2rem,5vw,2.5rem)}p{margin:0;line-height:1.65;color:#e8ebff}strong{color:#fff}a{color:#9bb3ff;text-decoration:none}a:hover{text-decoration:underline}.meta{margin-top:18px;color:#b9bfd9;font-size:.92rem}button{appearance:none;border:none;border-radius:12px;padding:12px 18px;background:linear-gradient(135deg,#5865f2,#4752c4);color:#fff;font-weight:700;cursor:pointer}button:hover{filter:brightness(1.08)}@media(max-width:640px){main{padding:22px 18px;border-radius:16px}}</style></head><body><main><h1>' +
-    escapeHtml(title) + '</h1><p>' + message + '</p><div class="meta">Auth Bot • Discord OAuth2</div></main></body></html>';
+  return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"theme-color\" content=\"#5865f2\"><title>" +
+    escapeHtml(title) + " · Auth Bot</title><style>" +
+    "*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at top,#252b58 0%,#111322 55%,#0b0c14 100%);color:#f7f7fb;font-family:Inter,Segoe UI,sans-serif}main{max-width:600px;width:min(100%,600px);padding:32px 28px;border-radius:20px;background:rgba(18,20,31,.82);border:1px solid rgba(255,255,255,.08);box-shadow:0 20px 60px rgba(0,0,0,.35)}h1{margin:0 0 12px;font-size:clamp(2rem,4vw,2.5rem)}p{margin:0;line-height:1.65;color:#dfe3ff}.meta{margin-top:20px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:#9aa4ff}.sr{display:none}.strong{font-weight:700}a{color:#8ab4ff}button{font:inherit}</style></head><body><main><h1>" +
+    escapeHtml(title) + "</h1><p>" + message + "</p><div class=\"meta\">Auth Bot • Discord OAuth2</div></main></body></html>";
 }
 
 const db = new Pool({
@@ -94,53 +121,126 @@ const db = new Pool({
   ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : undefined,
   connectionTimeoutMillis: 10000
 });
-const dbReady = db.query(`CREATE TABLE IF NOT EXISTS verified_users (
-  discord_id VARCHAR(20) PRIMARY KEY,
-  verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`).then(() => console.log("Verified-user database ready")).catch(error => {
+
+const dbReady = db.query(`
+  CREATE TABLE IF NOT EXISTS verified_users (
+    discord_id VARCHAR(20) PRIMARY KEY,
+    verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS guild_verify_config (
+    guild_id VARCHAR(20) PRIMARY KEY,
+    channel_id VARCHAR(20) NOT NULL,
+    title TEXT NOT NULL DEFAULT '🔒 Authorization required',
+    description TEXT NOT NULL DEFAULT 'You need to verify your Discord account before using this server.\n\nClick the button below and authorize the same account you use here.',
+    button_text TEXT NOT NULL DEFAULT 'Verify with Discord',
+    embed_color INTEGER NOT NULL DEFAULT 5865,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS restore_events (
+    id SERIAL PRIMARY KEY,
+    guild_id VARCHAR(20) NOT NULL,
+    discord_id VARCHAR(20) NOT NULL,
+    invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (guild_id, discord_id)
+  );
+`).then(() => console.log("Verified-user and guild configuration database ready")).catch(error => {
   console.error("Verified-user database initialization failed: " + error.message);
   process.exit(1);
 });
+
 async function isVerified(userId) {
   await dbReady;
   const result = await db.query("SELECT 1 FROM verified_users WHERE discord_id = $1", [userId]);
   return result.rowCount > 0;
 }
+
 async function markVerified(userId) {
   await dbReady;
   await db.query("INSERT INTO verified_users (discord_id) VALUES ($1) ON CONFLICT (discord_id) DO NOTHING", [userId]);
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
-const commandData = [
-  new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
-  new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
-  new SlashCommandBuilder().setName("verify").setDescription("Get the authorization button"),
-  new SlashCommandBuilder().setName("userinfo").setDescription("Show a user's basic profile")
-    .addUserOption(o => o.setName("user").setDescription("User to inspect").setRequired(false)),
-  new SlashCommandBuilder().setName("serverinfo").setDescription("Show this server's information"),
-  new SlashCommandBuilder().setName("avatar").setDescription("Show a user's avatar")
-    .addUserOption(o => o.setName("user").setDescription("User whose avatar to show").setRequired(false)),
-  new SlashCommandBuilder().setName("botinfo").setDescription("Show information about this bot"),
-  new SlashCommandBuilder().setName("uptime").setDescription("Show bot uptime")
-].map(command => command.toJSON());
+async function getGuildVerifyConfig(guildId) {
+  await dbReady;
+  const result = await db.query("SELECT * FROM guild_verify_config WHERE guild_id = $1", [guildId]);
+  return result.rows[0] || null;
+}
 
-function verifyRow(userId) {
+async function saveGuildVerifyConfig(guildId, config) {
+  await dbReady;
+  const payload = {
+    guild_id: guildId,
+    channel_id: config.channelId || "",
+    title: config.title || DEFAULT_VERIFY_TITLE,
+    description: config.description || DEFAULT_VERIFY_DESCRIPTION,
+    button_text: config.buttonText || DEFAULT_VERIFY_BUTTON,
+    embed_color: Number.isInteger(config.color) ? config.color : DEFAULT_VERIFY_COLOR,
+    updated_at: new Date()
+  };
+
+  await db.query(`
+    INSERT INTO guild_verify_config (guild_id, channel_id, title, description, button_text, embed_color, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    ON CONFLICT (guild_id) DO UPDATE SET
+      channel_id = EXCLUDED.channel_id,
+      title = EXCLUDED.title,
+      description = EXCLUDED.description,
+      button_text = EXCLUDED.button_text,
+      embed_color = EXCLUDED.embed_color,
+      updated_at = NOW()
+  `, [payload.guild_id, payload.channel_id, payload.title, payload.description, payload.button_text, payload.embed_color]);
+}
+
+async function getVerifiedUserIds() {
+  await dbReady;
+  const result = await db.query("SELECT discord_id FROM verified_users ORDER BY verified_at DESC");
+  return result.rows.map((row) => row.discord_id);
+}
+
+function buildVerifyRow(userId, label = DEFAULT_VERIFY_BUTTON) {
   const url = new URL("/login", APP_BASE_URL);
   url.searchParams.set("discord_id", userId);
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setLabel("Verify with Discord").setStyle(ButtonStyle.Link).setURL(url.toString())
+    new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url.toString())
   );
 }
-function verifyEmbed() {
-  return new EmbedBuilder().setColor(0x5865F2).setTitle("🔒 Authorization required")
-    .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, return to Discord and retry your command.")
+
+function buildVerifyEmbed({ title = DEFAULT_VERIFY_TITLE, description = DEFAULT_VERIFY_DESCRIPTION, color = DEFAULT_VERIFY_COLOR } = {}) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .setDescription(description)
     .setFooter({ text: "Secure Discord OAuth2 verification" });
 }
 
 async function showVerify(interaction) {
-  return interaction.reply({ embeds: [verifyEmbed()], components: [verifyRow(interaction.user.id)], ephemeral: true });
+  const guildConfig = await getGuildVerifyConfig(interaction.guild?.id || "");
+  const buttonText = guildConfig?.button_text || DEFAULT_VERIFY_BUTTON;
+  return interaction.reply({ embeds: [buildVerifyEmbed({ title: guildConfig?.title || DEFAULT_VERIFY_TITLE, description: guildConfig?.description || DEFAULT_VERIFY_DESCRIPTION, color: guildConfig?.embed_color || DEFAULT_VERIFY_COLOR })], components: [buildVerifyRow(interaction.user.id, buttonText)], ephemeral: true });
 }
+
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
+
+const commandData = [
+  new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
+  new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
+  new SlashCommandBuilder().setName("verify").setDescription("Send the verification embed")
+    .addChannelOption((option) => option.setName("channel").setDescription("Channel to send the embed in. Defaults to current channel.").setRequired(false))
+    .addStringOption((option) => option.setName("title").setDescription("Optional embed title").setRequired(false))
+    .addStringOption((option) => option.setName("description").setDescription("Optional embed description").setRequired(false))
+    .addStringOption((option) => option.setName("buttontext").setDescription("Optional button label").setRequired(false))
+    .addIntegerOption((option) => option.setName("color").setDescription("Optional embed color (example: 5865F2)").setRequired(false)),
+  new SlashCommandBuilder().setName("pull").setDescription("Send restore invites to verified users")
+    .addSubcommand((subcommand) => subcommand.setName("all").setDescription("Send an invite to every verified user"))
+    .addSubcommand((subcommand) => subcommand.setName("user").setDescription("Send an invite to one specific verified user").addUserOption((option) => option.setName("user").setDescription("Verified user to invite").setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName("count").setDescription("Send an invite to a number of verified users").addIntegerOption((option) => option.setName("count").setDescription("How many verified users to invite").setRequired(true).setMinValue(1).setMaxValue(100))),
+  new SlashCommandBuilder().setName("userinfo").setDescription("Show a user's basic profile").addUserOption((option) => option.setName("user").setDescription("User to inspect").setRequired(false)),
+  new SlashCommandBuilder().setName("serverinfo").setDescription("Show this server's information"),
+  new SlashCommandBuilder().setName("avatar").setDescription("Show a user's avatar").addUserOption((option) => option.setName("user").setDescription("User whose avatar to show").setRequired(false)),
+  new SlashCommandBuilder().setName("botinfo").setDescription("Show information about this bot"),
+  new SlashCommandBuilder().setName("uptime").setDescription("Show bot uptime")
+].map((command) => command.toJSON());
 
 client.once("ready", async () => {
   console.log("Discord bot logged in as " + client.user.tag);
@@ -154,30 +254,147 @@ client.once("ready", async () => {
   }
 });
 
-client.on("guildMemberAdd", async member => {
+client.on("guildMemberAdd", async (member) => {
   if (member.user.bot) return;
   try {
-    await member.send({
-      embeds: [verifyEmbed()],
-      components: [verifyRow(member.id)]
-    });
+    const guildConfig = await getGuildVerifyConfig(member.guild.id);
+    const title = guildConfig?.title || DEFAULT_VERIFY_TITLE;
+    const description = guildConfig?.description || DEFAULT_VERIFY_DESCRIPTION;
+    const buttonText = guildConfig?.button_text || DEFAULT_VERIFY_BUTTON;
+    const color = guildConfig?.embed_color || DEFAULT_VERIFY_COLOR;
+    const embed = buildVerifyEmbed({ title, description, color });
+    const row = buildVerifyRow(member.id, buttonText);
+    await member.send({ embeds: [embed], components: [row] });
     console.log("Sent verification prompt to newly joined user: " + member.user.tag);
   } catch (error) {
     console.log("Could not DM verification prompt to " + member.user.tag + ": " + error.message);
   }
 });
 
-client.on("interactionCreate", async interaction => {
+async function handleVerifyCommand(interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
+  }
+
+  if (!interaction.memberPermissions?.has("Administrator") && !interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({ content: "You need Administrator or Manage Server permission to configure verification.", ephemeral: true });
+  }
+
+  const targetChannel = interaction.options.getChannel("channel") || interaction.channel;
+  if (!targetChannel || !targetChannel.isTextBased?.()) {
+    return interaction.reply({ content: "Please choose a valid text channel for the verification embed.", ephemeral: true });
+  }
+
+  const title = interaction.options.getString("title") || DEFAULT_VERIFY_TITLE;
+  const description = interaction.options.getString("description") || DEFAULT_VERIFY_DESCRIPTION;
+  const buttonText = interaction.options.getString("buttontext") || DEFAULT_VERIFY_BUTTON;
+  const color = interaction.options.getInteger("color") ?? DEFAULT_VERIFY_COLOR;
+
+  await saveGuildVerifyConfig(interaction.guild.id, {
+    channelId: targetChannel.id,
+    title,
+    description,
+    buttonText,
+    color
+  });
+
+  const embed = buildVerifyEmbed({ title, description, color });
+  const row = buildVerifyRow(interaction.user.id, buttonText);
+  await targetChannel.send({ embeds: [embed], components: [row] });
+
+  return interaction.reply({ content: `Verification message sent to ${targetChannel}.`, ephemeral: true });
+}
+
+async function handlePullCommand(interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
+  }
+
+  if (!interaction.memberPermissions?.has("Administrator") && !interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({ content: "You need Administrator or Manage Server permission to use /pull.", ephemeral: true });
+  }
+
+  const verifiedIds = await getVerifiedUserIds();
+  const subcommand = interaction.options.getSubcommand();
+  let targetIds = [];
+
+  if (subcommand === "all") {
+    targetIds = verifiedIds;
+  } else if (subcommand === "user") {
+    const targetUser = interaction.options.getUser("user");
+    if (!targetUser) {
+      return interaction.reply({ content: "Please choose a valid user.", ephemeral: true });
+    }
+    if (!(await isVerified(targetUser.id))) {
+      return interaction.reply({ content: "That user is not verified yet.", ephemeral: true });
+    }
+    targetIds = [targetUser.id];
+  } else if (subcommand === "count") {
+    const requestedCount = interaction.options.getInteger("count");
+    targetIds = verifiedIds.slice(0, requestedCount);
+  }
+
+  if (!targetIds.length) {
+    return interaction.reply({ content: "No verified users matched this request.", ephemeral: true });
+  }
+
+  const inviteChannel = interaction.guild.channels.cache.find((channel) => channel.isTextBased?.() && channel.type !== ChannelType.GuildCategory && channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice);
+  if (!inviteChannel) {
+    return interaction.reply({ content: "This server does not have a usable text channel for invite links.", ephemeral: true });
+  }
+
+  let invite;
+  try {
+    invite = await inviteChannel.createInvite({
+      maxAge: 0,
+      maxUses: 1,
+      unique: true,
+      reason: "Restore verified members into the server"
+    });
+  } catch (error) {
+    console.error("Failed to create invite for restore: " + error.message);
+    return interaction.reply({ content: "I could not generate an invite link for this server.", ephemeral: true });
+  }
+
+  let sent = 0;
+  for (const userId of targetIds) {
+    const currentMember = interaction.guild.members.cache.get(userId) || null;
+    if (currentMember) continue;
+
+    try {
+      const user = await client.users.fetch(userId);
+      await user.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle("Rejoin " + interaction.guild.name)
+            .setDescription("A server administrator restored your access.\n\nJoin here: " + invite.url)
+            .setFooter({ text: "Secure server re-join" })
+        ]
+      });
+      sent += 1;
+      await db.query("INSERT INTO restore_events (guild_id, discord_id) VALUES ($1, $2) ON CONFLICT (guild_id, discord_id) DO NOTHING", [interaction.guild.id, userId]);
+    } catch (error) {
+      console.error("Could not DM restore invite to user " + userId + ": " + error.message);
+    }
+  }
+
+  return interaction.reply({ content: `Restore invite sent to ${sent} verified user(s).`, ephemeral: true });
+}
+
+client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   try {
     if (!interaction.inGuild()) {
       return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
     }
-    if (interaction.commandName === "verify") return showVerify(interaction);
+
+    if (interaction.commandName === "verify") return handleVerifyCommand(interaction);
+    if (interaction.commandName === "pull") return handlePullCommand(interaction);
+    if (interaction.commandName === "verify" && !interaction.guild) return showVerify(interaction);
     if (!(await isVerified(interaction.user.id))) return showVerify(interaction);
 
     if (interaction.commandName === "ping") {
-      const started = Date.now();
       await interaction.reply({ content: "🏓 Pong! API latency: " + Math.round(client.ws.ping) + "ms", ephemeral: true });
       return;
     }
@@ -191,8 +408,10 @@ client.on("interactionCreate", async interaction => {
           { name: "/serverinfo", value: "View server information.", inline: true },
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
-          { name: "/verify", value: "Get the authorization button.", inline: true }
-        ).setFooter({ text: "Auth Bot • Discord OAuth2" });
+          { name: "/verify", value: "Send a verification embed.", inline: true },
+          { name: "/pull", value: "Send restore invites to verified users.", inline: true }
+        )
+        .setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
     if (interaction.commandName === "userinfo") {
@@ -241,8 +460,7 @@ client.on("interactionCreate", async interaction => {
       const hours = Math.floor((total % 86400) / 3600);
       const minutes = Math.floor((total % 3600) / 60);
       const seconds = total % 60;
-      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("⏱️ Bot uptime")
-        .setDescription(days + "d " + hours + "h " + minutes + "m " + seconds + "s");
+      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("⏱️ Bot uptime").setDescription(days + "d " + hours + "h " + minutes + "m " + seconds + "s");
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
   } catch (error) {
@@ -257,9 +475,9 @@ app.get("/", (_req, res) => res.type("html").send(htmlPage(
   "Discord verification",
   'Use the **Verify with Discord** button in the bot\'s message. This site uses official Discord OAuth2 and never asks for your Discord password.'
 )));
+
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
-// Lightweight per-process throttling for OAuth endpoints; protects against rapid retries.
 const requestBuckets = new Map();
 function limitOAuthRequests(req, res, next) {
   const now = Date.now();
@@ -277,17 +495,25 @@ function limitOAuthRequests(req, res, next) {
   }
   return next();
 }
+
 app.get("/login", limitOAuthRequests, (req, res) => {
   const discordId = req.query.discord_id;
   if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
+
   const state = signState({ discordId, nonce: crypto.randomBytes(24).toString("hex"), exp: Date.now() + 600000 });
   res.setHeader("Set-Cookie", "oauth_state=" + encodeURIComponent(state) + "; HttpOnly" + cookieSecureAttribute() + "; SameSite=Lax; Path=/; Max-Age=600");
+
   const authorizeUrl = new URL("https://discord.com/oauth2/authorize");
   authorizeUrl.search = new URLSearchParams({
-    client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: "identify", state
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: "code",
+    scope: "identify guilds",
+    state
   }).toString();
+
   console.log("Starting Discord OAuth authorization for app ID ending in " + String(CLIENT_ID).slice(-4));
   return res.redirect(302, authorizeUrl.toString());
 });
@@ -298,28 +524,38 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
     clearCookie(res);
     return res.status(400).type("html").send(htmlPage("Authorization cancelled", "Return to Discord and try again if you intended to verify."));
   }
-  const cookieItem = (req.headers.cookie || "").split(";").map(p => p.trim()).find(p => p.startsWith("oauth_state="));
+
+  const cookieItem = (req.headers.cookie || "").split(";").map((p) => p.trim()).find((p) => p.startsWith("oauth_state="));
   const cookieState = cookieItem ? decodeURIComponent(cookieItem.slice("oauth_state=".length)) : null;
   clearCookie(res);
+
   if (typeof state !== "string" || !cookieState || state !== cookieState || !verifyState(state)) {
     return res.status(400).type("html").send(htmlPage("Verification failed", "The verification session is invalid or expired. Return to Discord and click Verify again."));
   }
+
   const statePayload = verifyState(state);
   if (typeof code !== "string" || !code) {
     return res.status(400).type("html").send(htmlPage("Verification failed", "Discord did not return an authorization code. Please try again."));
   }
+
   try {
     const tokenResponse = await axios.post("https://discord.com/api/v10/oauth2/token",
       new URLSearchParams({
-        client_id: CLIENT_ID, client_secret: CLIENT_SECRET, grant_type: "authorization_code",
-        code, redirect_uri: REDIRECT_URI
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: REDIRECT_URI
       }).toString(),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 10000 }
     );
+
     const accessToken = tokenResponse.data.access_token;
     const profile = await axios.get("https://discord.com/api/v10/users/@me", {
-      headers: { Authorization: "Bearer " + accessToken }, timeout: 10000
+      headers: { Authorization: "Bearer " + accessToken },
+      timeout: 10000
     });
+
     const user = profile.data;
     if (!user || !user.id || user.id !== statePayload.discordId) {
       return res.status(403).type("html").send(htmlPage(
@@ -327,6 +563,7 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
         "You authorized a different account from the one that clicked Verify. Return to Discord, switch to the correct account, and click Verify again."
       ));
     }
+
     await markVerified(user.id);
     return res.status(200).type("html").send(htmlPage(
       "Verification complete",
@@ -336,13 +573,14 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
   } catch (err) {
     const status = err.response && err.response.status;
     console.error("OAuth verification/database save failed: " + (status || err.message));
-    const message = "Discord authorization or saving verification failed. Please return to Discord and try again.";
-    return res.status(502).type("html").send(htmlPage("Verification could not be completed", message));
+    return res.status(502).type("html").send(htmlPage("Verification could not be completed", "Discord authorization or saving verification failed. Please return to Discord and try again."));
   }
 });
+
 app.use((_req, res) => res.status(404).type("text").send("Not found"));
+
 const httpServer = app.listen(PORT, "0.0.0.0", () => console.log("Auth Bot web server listening on port " + PORT));
-client.login(DISCORD_TOKEN).catch(error => {
+client.login(DISCORD_TOKEN).catch((error) => {
   console.error("Discord bot login failed: " + error.message);
   process.exit(1);
 });
@@ -355,7 +593,7 @@ async function shutdown(signal) {
   const forceExit = setTimeout(() => process.exit(1), 10000);
   forceExit.unref();
   try {
-    await new Promise(resolve => httpServer.close(resolve));
+    await new Promise((resolve) => httpServer.close(resolve));
     client.destroy();
     await db.end();
     clearTimeout(forceExit);
@@ -365,12 +603,13 @@ async function shutdown(signal) {
     process.exit(1);
   }
 }
+
 process.once("SIGTERM", () => shutdown("SIGTERM"));
 process.once("SIGINT", () => shutdown("SIGINT"));
-process.on("unhandledRejection", error => {
+process.on("unhandledRejection", (error) => {
   console.error("Unhandled promise rejection:", error instanceof Error ? error.message : String(error));
 });
-process.on("uncaughtException", error => {
+process.on("uncaughtException", (error) => {
   console.error("Uncaught exception:", error.message);
   shutdown("uncaughtException");
 });
