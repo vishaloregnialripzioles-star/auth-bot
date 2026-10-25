@@ -17,6 +17,8 @@ const {
   SlashCommandBuilder
 } = require("discord.js");
 
+const TARGET_GUILD_ID = "1455387070615916756";
+
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -285,6 +287,7 @@ client.once("ready", async () => {
 
 client.on("guildMemberAdd", async (member) => {
   if (member.user.bot) return;
+  if (member.guild.id !== TARGET_GUILD_ID) return;
   try {
     const guildConfig = await getGuildVerifyConfig(member.guild.id);
     const title = guildConfig?.title || DEFAULT_VERIFY_TITLE;
@@ -303,6 +306,9 @@ client.on("guildMemberAdd", async (member) => {
 async function handleVerifyCommand(interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
+  }
+  if (interaction.guild.id !== TARGET_GUILD_ID) {
+    return interaction.reply({ content: `This bot is locked to guild ID ${TARGET_GUILD_ID}.`, ephemeral: true });
   }
 
   if (!interaction.memberPermissions?.has("Administrator") && !interaction.memberPermissions?.has("ManageGuild")) {
@@ -350,6 +356,9 @@ async function addUserToGuild(guildId, userId, accessToken) {
 async function handlePullCommand(interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
+  }
+  if (interaction.guild.id !== TARGET_GUILD_ID) {
+    return interaction.reply({ content: `This operation is locked to guild ID ${TARGET_GUILD_ID}.`, ephemeral: true });
   }
 
   if (!interaction.memberPermissions?.has("Administrator") && !interaction.memberPermissions?.has("ManageGuild")) {
@@ -404,7 +413,7 @@ async function handlePullCommand(interaction) {
     }
   }
 
-  return interaction.reply({ content: `Direct join attempted for ${successCount} verified user(s). ${missingTokenCount} user(s) were not eligible because they had not authorized guild join access.`, ephemeral: true });
+  return interaction.reply({ content: `Direct join attempted for ${successCount} verified user(s) in guild ${TARGET_GUILD_ID}. ${missingTokenCount} user(s) were not eligible because they had not authorized guild join access.`, ephemeral: true });
 }
 
 client.on("interactionCreate", async (interaction) => {
@@ -416,7 +425,6 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "verify") return handleVerifyCommand(interaction);
     if (interaction.commandName === "pull") return handlePullCommand(interaction);
-    if (interaction.commandName === "verify" && !interaction.guild) return showVerify(interaction);
     if (!(await isVerified(interaction.user.id))) return showVerify(interaction);
 
     if (interaction.commandName === "ping") {
@@ -434,7 +442,7 @@ client.on("interactionCreate", async (interaction) => {
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
           { name: "/verify", value: "Send a verification embed.", inline: true },
-          { name: "/pull", value: "Directly add verified users to the server.", inline: true }
+          { name: "/pull", value: "Directly add verified users to the target guild.", inline: true }
         )
         .setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
