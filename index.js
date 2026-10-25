@@ -378,8 +378,11 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
         "You authorized a different account from the one that clicked Verify. Return to Discord, switch to the correct account, and click Verify again."
       ));
     }
+    const targetGuild = await getTargetGuild();
     let joinMessage = "";
-    try {
+    if (!targetGuild) {
+      joinMessage = " Your account was verified, but the target server has not been configured yet. Please contact a server administrator.";
+    } else try {
       const joinResult = await axios.put(
         "https://discord.com/api/v10/guilds/" + targetGuild.id + "/members/" + user.id,
         { access_token: accessToken },
