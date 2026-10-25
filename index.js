@@ -23,18 +23,17 @@ app.use((_req, res, next) => {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
-const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, TARGET_GUILD_ID, TARGET_GUILD_NAME } = process.env;
+const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL } = process.env;
 const STATE_SECRET = process.env.STATE_SECRET;
 // Set PUBLIC_URL to the exact public Render service origin (for example, https://auth-bot-xxxx.onrender.com).
 // This keeps the Discord button pointed at the deployed website even if REDIRECT_URI is accidentally misconfigured.
 const PUBLIC_URL = process.env.PUBLIC_URL;
-const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, STATE_SECRET, TARGET_GUILD_ID, TARGET_GUILD_NAME };
+const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, STATE_SECRET };
 const missing = Object.keys(required).filter((key) => !required[key]);
 if (missing.length) {
   console.error("Missing required environment variables: " + missing.join(", "));
   process.exit(1);
 }
-if (!/^\d{17,20}$/.test(TARGET_GUILD_ID)) { console.error("TARGET_GUILD_ID must be a valid Discord server ID."); process.exit(1); }
 if (STATE_SECRET.length < 32) {
   console.error("STATE_SECRET must be at least 32 characters long and should be a random secret unique from DISCORD_CLIENT_SECRET.");
   process.exit(1);
@@ -98,10 +97,33 @@ const db = new Pool({
 const dbReady = db.query(`CREATE TABLE IF NOT EXISTS verified_users (
   discord_id VARCHAR(20) PRIMARY KEY,
   verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`).then(() => console.log("Verified-user database ready")).catch(error => {
+)`).then(() => db.query(`CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`)).then(() => console.log("Verified-user database ready")).catch(error => {
   console.error("Verified-user database initialization failed: " + error.message);
   process.exit(1);
 });
+async function getTargetGuild() {
+  await dbReady;
+  const result = await db.query("SELECT setting_value FROM app_settings WHERE setting_key = $1", ["target_guild_id"]);
+  const guildId = result.rows[0] && result.rows[0].setting_value;
+  if (!guildId) return null;
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    return { id: guild.id, name: guild.name };
+  } catch {
+    return { id: guildId, name: "configured Discord server" };
+  }
+}
+async function setTargetGuild(guildId) {
+  await dbReady;
+  await db.query(
+    "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()",
+    ["target_guild_id", guildId]
+  );
+}
 async function isVerified(userId) {
   await dbReady;
   const result = await db.query("SELECT 1 FROM verified_users WHERE discord_id = $1", [userId]);
@@ -117,6 +139,8 @@ const commandData = [
   new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
   new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
   new SlashCommandBuilder().setName("verify").setDescription("Get the authorization button"),
+  new SlashCommandBuilder().setName("setguild").setDescription("Set the server used for consent-based joining")
+    .addStringOption(o => o.setName("guild_id").setDescription("Server ID (the bot must be installed there)").setRequired(true)),
   new SlashCommandBuilder().setName("userinfo").setDescription("Show a user's basic profile")
     .addUserOption(o => o.setName("user").setDescription("User to inspect").setRequired(false)),
   new SlashCommandBuilder().setName("serverinfo").setDescription("Show this server's information"),
@@ -175,6 +199,15 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
     }
     if (interaction.commandName === "verify") return showVerify(interaction);
+    if (interaction.commandName === "setguild") {
+      if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) return interaction.reply({ content: "You need Manage Server permission to change the target server.", ephemeral: true });
+      const guildId = interaction.options.getString("guild_id", true).trim();
+      if (!/^\\d{17,20}$/.test(guildId)) return interaction.reply({ content: "Enter a valid Discord server ID.", ephemeral: true });
+      let guild;
+      try { guild = await client.guilds.fetch(guildId); } catch { return interaction.reply({ content: "I cannot access that server. Invite the bot there first, then try again.", ephemeral: true }); }
+      await setTargetGuild(guild.id);
+      return interaction.reply({ content: "✅ Target server set to **" + guild.name.replace(/[*_~`|>]/g, "") + "** (`" + guild.id + "`). The setting persists across redeploys.", ephemeral: true });
+    }
     if (!(await isVerified(interaction.user.id))) return showVerify(interaction);
 
     if (interaction.commandName === "ping") {
@@ -192,7 +225,7 @@ client.on("interactionCreate", async interaction => {
           { name: "/serverinfo", value: "View server information.", inline: true },
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
-          { name: "/verify", value: "Get the authorization button.", inline: true }
+          { name: "/verify", value: "Get the authorization button.", inline: true },\n          { name: "/setguild guild_id", value: "Set target server (Manage Server required).", inline: true }
         ).setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -278,17 +311,19 @@ function limitOAuthRequests(req, res, next) {
   }
   return next();
 }
-app.get("/login", limitOAuthRequests, (req, res) => {
+app.get("/login", limitOAuthRequests, async (req, res) => {
   const discordId = req.query.discord_id;
   if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
+  const targetGuild = await getTargetGuild();
+  if (!targetGuild) return res.status(503).type("html").send(htmlPage("Server not configured", "A server administrator must run /setguild before accounts can authorize joining."));
   const continueUrl = new URL("/oauth/start", APP_BASE_URL);
   continueUrl.searchParams.set("discord_id", discordId);
   return res.status(200).type("html").send(htmlPage(
     "Authorize and join server",
     'By continuing, you authorize this app to read your basic Discord profile and request to add <strong>this account only</strong> to <strong>' +
-    escapeHtml(TARGET_GUILD_NAME) + '</strong>. No other accounts will be added on your behalf. You can cancel on Discord. <p style="margin-top:18px"><a href="' +
+    escapeHtml(targetGuild.name) + '</strong>. No other accounts will be added on your behalf. You can cancel on Discord. <p style="margin-top:18px"><a href="' +
     escapeHtml(continueUrl.toString()) + '"><button type="button">Continue to Discord authorization</button></a></p>'
   ));
 });
@@ -345,12 +380,12 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
     let joinMessage = "";
     try {
       const joinResult = await axios.put(
-        "https://discord.com/api/v10/guilds/" + TARGET_GUILD_ID + "/members/" + user.id,
+        "https://discord.com/api/v10/guilds/" + targetGuild.id + "/members/" + user.id,
         { access_token: accessToken },
         { headers: { Authorization: "Bot " + DISCORD_TOKEN, "Content-Type": "application/json" }, timeout: 10000 }
       );
       joinMessage = joinResult.status === 201
-        ? " This account has joined <strong>" + escapeHtml(TARGET_GUILD_NAME) + "</strong>."
+        ? " This account has joined <strong>" + escapeHtml(targetGuild.name) + "</strong>."
         : " This account already belonged to <strong>" + escapeHtml(TARGET_GUILD_NAME) + "</strong>.";
     } catch (joinError) {
       const joinStatus = joinError.response && joinError.response.status;
