@@ -181,7 +181,7 @@ async function getUsableAccessToken(userId) {
     tokens = { access_token: refreshed.data.access_token, refresh_token: refreshed.data.refresh_token || tokens.refresh_token, scope: refreshed.data.scope || tokens.scope || "" };
     await saveOAuthTokens(userId, { ...tokens, expires_in: refreshed.data.expires_in });
   }
-  if (!String(tokens.scope || "").split(/\\s+/).includes("guilds.join")) {
+  if (!String(tokens.scope || "").split(/\s+/).includes("guilds.join")) {
     throw new Error("This account has not granted the guilds.join permission; verify again and approve the requested permissions.");
   }
   return tokens.access_token;
