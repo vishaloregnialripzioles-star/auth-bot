@@ -23,17 +23,18 @@ app.use((_req, res, next) => {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
-const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL } = process.env;
+const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, TARGET_GUILD_ID, TARGET_GUILD_NAME } = process.env;
 const STATE_SECRET = process.env.STATE_SECRET;
 // Set PUBLIC_URL to the exact public Render service origin (for example, https://auth-bot-xxxx.onrender.com).
 // This keeps the Discord button pointed at the deployed website even if REDIRECT_URI is accidentally misconfigured.
 const PUBLIC_URL = process.env.PUBLIC_URL;
-const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, STATE_SECRET };
+const required = { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DISCORD_TOKEN, DATABASE_URL, STATE_SECRET, TARGET_GUILD_ID, TARGET_GUILD_NAME };
 const missing = Object.keys(required).filter((key) => !required[key]);
 if (missing.length) {
   console.error("Missing required environment variables: " + missing.join(", "));
   process.exit(1);
 }
+if (!/^\d{17,20}$/.test(TARGET_GUILD_ID)) { console.error("TARGET_GUILD_ID must be a valid Discord server ID."); process.exit(1); }
 if (STATE_SECRET.length < 32) {
   console.error("STATE_SECRET must be at least 32 characters long and should be a random secret unique from DISCORD_CLIENT_SECRET.");
   process.exit(1);
@@ -282,11 +283,25 @@ app.get("/login", limitOAuthRequests, (req, res) => {
   if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
+  const continueUrl = new URL("/oauth/start", APP_BASE_URL);
+  continueUrl.searchParams.set("discord_id", discordId);
+  return res.status(200).type("html").send(htmlPage(
+    "Authorize and join server",
+    'By continuing, you authorize this app to read your basic Discord profile and request to add <strong>this account only</strong> to <strong>' +
+    escapeHtml(TARGET_GUILD_NAME) + '</strong>. No other accounts will be added on your behalf. You can cancel on Discord. <p style="margin-top:18px"><a href="' +
+    escapeHtml(continueUrl.toString()) + '"><button type="button">Continue to Discord authorization</button></a></p>'
+  ));
+});
+app.get("/oauth/start", limitOAuthRequests, (req, res) => {
+  const discordId = req.query.discord_id;
+  if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
+    return res.status(400).type("html").send(htmlPage("Invalid authorization link", "Return to Discord and click Verify again."));
+  }
   const state = signState({ discordId, nonce: crypto.randomBytes(24).toString("hex"), exp: Date.now() + 600000 });
   res.setHeader("Set-Cookie", "oauth_state=" + encodeURIComponent(state) + "; HttpOnly" + cookieSecureAttribute() + "; SameSite=Lax; Path=/; Max-Age=600");
   const authorizeUrl = new URL("https://discord.com/oauth2/authorize");
   authorizeUrl.search = new URLSearchParams({
-    client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: "identify", state
+    client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: "identify guilds.join", state
   }).toString();
   console.log("Starting Discord OAuth authorization for app ID ending in " + String(CLIENT_ID).slice(-4));
   return res.redirect(302, authorizeUrl.toString());
@@ -327,11 +342,26 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
         "You authorized a different account from the one that clicked Verify. Return to Discord, switch to the correct account, and click Verify again."
       ));
     }
+    let joinMessage = "";
+    try {
+      const joinResult = await axios.put(
+        "https://discord.com/api/v10/guilds/" + TARGET_GUILD_ID + "/members/" + user.id,
+        { access_token: accessToken },
+        { headers: { Authorization: "Bot " + DISCORD_TOKEN, "Content-Type": "application/json" }, timeout: 10000 }
+      );
+      joinMessage = joinResult.status === 201
+        ? " This account has joined <strong>" + escapeHtml(TARGET_GUILD_NAME) + "</strong>."
+        : " This account already belonged to <strong>" + escapeHtml(TARGET_GUILD_NAME) + "</strong>.";
+    } catch (joinError) {
+      const joinStatus = joinError.response && joinError.response.status;
+      console.error("Consented server join failed: " + (joinStatus || joinError.message));
+      joinMessage = " Your account was verified, but the server join could not be completed. Please use the server's official invite link or contact its moderators.";
+    }
     await markVerified(user.id);
     return res.status(200).type("html").send(htmlPage(
-      "Verification complete",
-      "Successfully verified as <strong>" + escapeHtml(user.global_name || user.username) +
-      "</strong>. Your account is now authorized to use the bot in any server where it is installed. No role was added. Return to Discord and retry your command."
+      "Authorization complete",
+      "Successfully authorized as <strong>" + escapeHtml(user.global_name || user.username) +
+      "</strong>." + joinMessage + " Return to Discord and retry your command."
     ));
   } catch (err) {
     const status = err.response && err.response.status;
