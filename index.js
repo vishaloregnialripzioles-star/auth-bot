@@ -139,8 +139,7 @@ const commandData = [
   new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
   new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
   new SlashCommandBuilder().setName("verify").setDescription("Get the authorization button"),
-  new SlashCommandBuilder().setName("pull").setDescription("Preview verified accounts; does not join accounts to servers")
-    .addIntegerOption(o => o.setName("count").setDescription("Maximum accounts to preview (1-25)").setMinValue(1).setMaxValue(25).setRequired(false)),
+  new SlashCommandBuilder().setName("pull").setDescription("Authorize your account to join the configured server"),
   new SlashCommandBuilder().setName("setguild").setDescription("Set the server used for consent-based joining")
     .addStringOption(o => o.setName("guild_id").setDescription("Server ID (the bot must be installed there)").setRequired(true)),
   new SlashCommandBuilder().setName("userinfo").setDescription("Show a user's basic profile")
@@ -205,26 +204,17 @@ client.on("interactionCreate", async interaction => {
       if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) {
         return interaction.reply({ content: "You need Manage Server permission to use /pull.", ephemeral: true });
       }
-      await dbReady;
-      const limit = interaction.options.getInteger("count") || 10;
-      const result = await db.query(
-        "SELECT discord_id, verified_at FROM verified_users ORDER BY verified_at DESC LIMIT $1",
-        [limit]
-      );
-      if (!result.rows.length) {
-        return interaction.reply({
-          content: "No verified accounts are recorded yet. /pull is a preview only; it does not add accounts to any server.",
-          ephemeral: true
-        });
+      const targetGuild = await getTargetGuild();
+      if (!targetGuild) {
+        return interaction.reply({ content: "No target server is configured. Ask an administrator to run /setguild first.", ephemeral: true });
       }
-      const lines = result.rows.map((row, index) =>
-        (index + 1) + ". <@" + row.discord_id + "> (ID: \`" + row.discord_id + "\`) — verified <t:" +
-        Math.floor(new Date(row.verified_at).getTime() / 1000) + ":R>"
-      );
-      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("🔎 Verified-account preview")
-        .setDescription(lines.join("\n"))
-        .setFooter({ text: "Preview only • No accounts were added to a server" });
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle("🔐 Authorize this account to join")
+        .setDescription(
+          "This will authorize **only your current Discord account** to join **" + targetGuild.name.replace(/[*_~`|>]/g, "") +
+          "**. Press the button, sign in to the same Discord account that ran this command, and approve the requested permissions. The bot will verify the account matches before requesting the join. Other accounts will not be added."
+        )
+        .setFooter({ text: "Each alt must complete its own Discord OAuth2 authorization" });
+      return interaction.reply({ embeds: [embed], components: [verifyRow(interaction.user.id)], ephemeral: true });
     }
     if (interaction.commandName === "setguild") {
       if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) return interaction.reply({ content: "You need Manage Server permission to change the target server.", ephemeral: true });
@@ -253,7 +243,7 @@ client.on("interactionCreate", async interaction => {
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
           { name: "/verify", value: "Get the authorization button.", inline: true },
-          { name: "/pull [count]", value: "Preview recent verified accounts (Manage Server required); no automatic joining.", inline: true },
+          { name: "/pull", value: "Start OAuth2 authorization for your current account to join the configured server (Manage Server required). Each alt must authorize itself.", inline: true },
           { name: "/setguild guild_id", value: "Set target server (Manage Server required).", inline: true }
         ).setFooter({ text: "Auth Bot • Discord OAuth2" });
       return interaction.reply({ embeds: [embed], ephemeral: true });
