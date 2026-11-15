@@ -215,7 +215,7 @@ function verifyRow(userId) {
 }
 function verifyEmbed() {
   return new EmbedBuilder().setColor(0x5865F2).setTitle("🔒 Authorization required")
-    .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Verify with Discord** below and authorize the same account you use in this server. After verification, return to Discord and retry your command.")
+    .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Authorize with Discord** below and authorize the same account you use in this server. After verification, return to Discord and retry your command.")
     .setFooter({ text: "Secure Discord OAuth2 verification" });
 }
 
