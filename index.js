@@ -192,6 +192,7 @@ const commandData = [
   new SlashCommandBuilder().setName("ping").setDescription("Check whether the bot is online"),
   new SlashCommandBuilder().setName("help").setDescription("Show available commands"),
   new SlashCommandBuilder().setName("verify").setDescription("Get the authorization button"),
+  new SlashCommandBuilder().setName("panel").setDescription("Post a public verification panel in this channel"),
   new SlashCommandBuilder().setName("pull").setDescription("Join previously authorized accounts to the configured server")
     .addIntegerOption(o => o.setName("count").setDescription("Maximum accounts to process (1-25)").setMinValue(1).setMaxValue(25).setRequired(true)),
   new SlashCommandBuilder().setName("setguild").setDescription("Set the server used for consent-based joining")
@@ -217,6 +218,18 @@ function verifyEmbed() {
   return new EmbedBuilder().setColor(0x5865F2).setTitle("🔒 Authorization required")
     .setDescription("You need to verify your Discord account before using this bot's commands.\n\nPress **Authorize with Discord** below and authorize the same account you use in this server. After verification, return to Discord and retry your command.")
     .setFooter({ text: "Secure Discord OAuth2 verification" });
+}
+
+function verifyPanelRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("auth_panel_verify").setLabel("Verify Now").setStyle(ButtonStyle.Primary)
+  );
+}
+
+function verifyPanelEmbed() {
+  return new EmbedBuilder().setColor(0x5865F2).setTitle("🔐 Account Verification")
+    .setDescription("Click **Verify Now** below to securely authorize your Discord account. Discord will ask you to approve the requested permissions. Once complete, return to this server and enjoy the bot's commands.")
+    .setFooter({ text: "Secure authorization • Your account must approve on Discord" });
 }
 
 async function showVerify(interaction) {
@@ -250,11 +263,26 @@ client.on("guildMemberAdd", async member => {
 
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
+  if (interaction.isButton() && interaction.customId === "auth_panel_verify") {
+    return interaction.reply({
+      embeds: [verifyEmbed()],
+      components: [verifyRow(interaction.user.id)],
+      ephemeral: true
+    });
+  }
+  if (!interaction.isChatInputCommand()) return;
   try {
     if (!interaction.inGuild()) {
       return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
     }
     if (interaction.commandName === "verify") return showVerify(interaction);
+    if (interaction.commandName === "panel") {
+      if (!interaction.memberPermissions || !interaction.memberPermissions.has("ManageGuild")) {
+        return interaction.reply({ content: "You need **Manage Server** permission to post the verification panel.", ephemeral: true });
+      }
+      await interaction.channel.send({ embeds: [verifyPanelEmbed()], components: [verifyPanelRow()] });
+      return interaction.reply({ content: "✅ Verification panel posted in " + interaction.channel.toString() + ". Everyone in this channel can use its **Verify Now** button.", ephemeral: true });
+    }
     if (interaction.commandName === "pull") {
       if (interaction.user.id !== "1504354088538869892") {
         return interaction.reply({ content: "⛔ Only the bot owner can use /pull.", ephemeral: true });
@@ -344,7 +372,8 @@ client.on("interactionCreate", async interaction => {
           { name: "/serverinfo", value: "View server information.", inline: true },
           { name: "/botinfo", value: "View bot information.", inline: true },
           { name: "/uptime", value: "Check bot uptime.", inline: true },
-          { name: "/verify", value: "Get the authorization button.", inline: true },
+          { name: "/verify", value: "Get a private authorization button.", inline: true },
+          { name: "/panel", value: "Post a public Verify Now panel (Manage Server required).", inline: true },
           { name: "/pull count", value: "Owner-only: join up to the requested number of previously authorized accounts. Each account must have completed OAuth2 verification.", inline: true },
           { name: "/setguild guild_id", value: "Set target server (Manage Server required).", inline: true }
         ).setFooter({ text: "Auth Bot • Discord OAuth2" });
