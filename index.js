@@ -206,10 +206,11 @@ const commandData = [
 ].map(command => command.toJSON());
 
 function verifyRow(userId) {
-  const url = new URL("/login", APP_BASE_URL);
+  // Create the signed OAuth state, then immediately redirect to Discord's native consent screen.
+  const url = new URL("/oauth/start", APP_BASE_URL);
   url.searchParams.set("discord_id", userId);
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setLabel("Verify with Discord").setStyle(ButtonStyle.Link).setURL(url.toString())
+    new ButtonBuilder().setLabel("Authorize with Discord").setStyle(ButtonStyle.Link).setURL(url.toString())
   );
 }
 function verifyEmbed() {
@@ -431,21 +432,15 @@ function limitOAuthRequests(req, res, next) {
   }
   return next();
 }
-app.get("/login", limitOAuthRequests, async (req, res) => {
+// Backwards-compatible route for old verification links: skip the landing page.
+app.get("/login", limitOAuthRequests, (req, res) => {
   const discordId = req.query.discord_id;
-  if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
+  if (typeof discordId !== "string" || !/^\\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
-  const targetGuild = await getTargetGuild();
-  if (!targetGuild) return res.status(503).type("html").send(htmlPage("Server not configured", "A server administrator must run /setguild before accounts can authorize joining."));
-  const continueUrl = new URL("/oauth/start", APP_BASE_URL);
-  continueUrl.searchParams.set("discord_id", discordId);
-  return res.status(200).type("html").send(htmlPage(
-    "Authorize and join server",
-    'By continuing, you authorize this app to read your basic Discord profile and request to add <strong>this account only</strong> to <strong>' +
-    escapeHtml(targetGuild.name) + '</strong>. No other accounts will be added on your behalf. You can cancel on Discord. <p style="margin-top:18px"><a href="' +
-    escapeHtml(continueUrl.toString()) + '"><button type="button">Continue to Discord authorization</button></a></p>'
-  ));
+  const startUrl = new URL("/oauth/start", APP_BASE_URL);
+  startUrl.searchParams.set("discord_id", discordId);
+  return res.redirect(302, startUrl.toString());
 });
 app.get("/oauth/start", limitOAuthRequests, (req, res) => {
   const discordId = req.query.discord_id;
