@@ -46,12 +46,12 @@ The OAuth redirect URI must exactly match the URL registered in the Discord Deve
 
 ## Authorization behavior
 
-Users run any utility command. If they have not verified, the bot replies privately with a **Verify with Discord** button. After authorizing the same Discord account in the browser, they return to Discord and retry the command. Verification is account-wide and does not grant a role or bypass any server's own permissions.
+Users run any utility command. If they have not verified, the bot replies privately with an **Authorize with Discord** button. Tapping it goes straight to Discord's official OAuth2 consent screen (there is no intermediate verification landing page). Discord returns to the configured callback after approval so the bot can securely validate the account and save the authorization. Users can then return to Discord and retry the command. Verification is account-wide and does not grant a role or bypass any server's own permissions.
 
 ## Security notes
 
 - Never publish `.env`, bot tokens, client secrets, database URLs, or OAuth tokens.
 - Keep `STATE_SECRET` stable between deploys; rotating it invalidates in-progress OAuth attempts.
-- Only the `identify` OAuth scope is requested. The bot does not ask for passwords.
+- The `identify` and `guilds.join` OAuth scopes are requested for account verification and the user's explicitly authorized server-join flow. The bot does not ask for passwords.
 - The built-in rate limiter is process-local. If you scale the service to multiple instances, use a shared rate-limit store.
 - Verification means the user authorized the app to identify their Discord account; it is not proof of age, identity, or trustworthiness.
