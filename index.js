@@ -262,16 +262,16 @@ client.on("guildMemberAdd", async member => {
 });
 
 client.on("interactionCreate", async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.isButton() && interaction.customId === "auth_panel_verify") {
-    return interaction.reply({
-      embeds: [verifyEmbed()],
-      components: [verifyRow(interaction.user.id)],
-      ephemeral: true
-    });
-  }
-  if (!interaction.isChatInputCommand()) return;
   try {
+    // Handle component interactions before filtering for slash commands.
+    if (interaction.isButton() && interaction.customId === "auth_panel_verify") {
+      return interaction.reply({
+        embeds: [verifyEmbed()],
+        components: [verifyRow(interaction.user.id)],
+        ephemeral: true
+      });
+    }
+    if (!interaction.isChatInputCommand()) return;
     if (!interaction.inGuild()) {
       return interaction.reply({ content: "Use this command inside a Discord server where the bot is installed.", ephemeral: true });
     }
