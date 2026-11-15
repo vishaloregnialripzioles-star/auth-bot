@@ -435,7 +435,7 @@ function limitOAuthRequests(req, res, next) {
 // Backwards-compatible route for old verification links: skip the landing page.
 app.get("/login", limitOAuthRequests, (req, res) => {
   const discordId = req.query.discord_id;
-  if (typeof discordId !== "string" || !/^\\d{17,20}$/.test(discordId)) {
+  if (typeof discordId !== "string" || !/^\d{17,20}$/.test(discordId)) {
     return res.status(400).type("html").send(htmlPage("Invalid verification link", "Return to Discord and click Verify in the bot's message."));
   }
   const startUrl = new URL("/oauth/start", APP_BASE_URL);
