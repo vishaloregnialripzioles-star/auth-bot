@@ -408,10 +408,19 @@ client.on("interactionCreate", async interaction => {
   }
 });
 
-app.get("/", (_req, res) => res.type("html").send(htmlPage(
-  "Discord verification",
-  'Use the **Verify with Discord** button in the bot\'s message. This site uses official Discord OAuth2 and never asks for your Discord password.'
-)));
+app.get("/", (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status : "";
+  const pages = {
+    verified: ["Authorization successful", "Your Discord account has been verified. Return to Discord and continue using the bot."],
+    joined: ["You're all set!", "Your Discord account has been verified and joined the configured server. Return to Discord to continue."],
+    already: ["Already a member", "Your Discord account is verified and was already a member of the configured server."],
+    join_failed: ["Authorization successful", "Your Discord account is verified, but the server join could not be completed. Contact a server moderator for help."],
+    not_configured: ["Authorization successful", "Your Discord account is verified. The destination server has not been configured yet."]
+  };
+  const page = pages[status] || ["Discord Auth Bot", "Use the authorization button in the bot's Discord message. Approval takes place on Discord's official authorization screen."];
+  const body = '<h1 style="text-align:center">' + escapeHtml(page[0]) + '</h1><p style="text-align:center">' + escapeHtml(page[1]) + '</p><p style="text-align:center;margin-top:24px"><a href="https://discord.com/app" style="display:inline-block;padding:12px 20px;border-radius:12px;background:#5865f2;color:white;font-weight:700;text-decoration:none">Return to Discord</a></p>';
+  return res.type("html").send(htmlPage(page[0], body));
+});
 app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
 
 // Lightweight per-process throttling for OAuth endpoints; protects against rapid retries.
@@ -512,11 +521,10 @@ app.get("/auth/callback", limitOAuthRequests, async (req, res) => {
       console.error("Consented server join failed: " + (joinStatus || joinError.message));
       joinMessage = " Your account was verified, but the server join could not be completed. Please use the server's official invite link or contact its moderators.";
     }
-    return res.status(200).type("html").send(htmlPage(
-      "Authorization complete",
-      "Successfully authorized as <strong>" + escapeHtml(user.global_name || user.username) +
-      "</strong>." + joinMessage + " Return to Discord and retry your command."
-    ));
+    const landingStatus = !targetGuild ? "not_configured" : (joinMessage.includes("has joined") ? "joined" : (joinMessage.includes("already belonged") ? "already" : "join_failed"));
+    const destination = new URL("/", APP_BASE_URL);
+    destination.searchParams.set("status", landingStatus);
+    return res.redirect(303, destination.toString());
   } catch (err) {
     const status = err.response && err.response.status;
     console.error("OAuth verification/database save failed: " + (status || err.message));
